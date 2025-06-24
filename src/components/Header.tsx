@@ -10,6 +10,12 @@ export const Header: React.FC = () => {
   const { showNotification } = useNotification();
 
   const handleLogout = async () => {
+    const confirmLogout = window.confirm(
+      '面接が進行中の場合、ログアウトすると進行状況が失われます。ログアウトしますか？'
+    );
+    
+    if (!confirmLogout) return;
+
     try {
       const { error } = await authHelpers.signOut();
       if (error) {
@@ -25,7 +31,11 @@ export const Header: React.FC = () => {
           title: 'ログアウトしました',
           duration: 3000
         });
-        navigate('/login');
+        
+        // ログアウト後にログイン画面にリダイレクト
+        setTimeout(() => {
+          navigate('/login');
+        }, 1000);
       }
     } catch (error) {
       console.error('Logout error:', error);

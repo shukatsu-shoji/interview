@@ -8,27 +8,33 @@ import { LoadingSpinner } from '../LoadingSpinner';
 import { VoiceInputButton } from '../VoiceInputButton';
 import { usePerformanceTracking } from '../PerformanceMonitor';
 import { useUsageTracking } from '../../hooks/useUsageTracking';
+import { useAuth } from '../../hooks/useAuth';
 
 interface InterviewScreenProps {
   settings: InterviewSettings;
   onBack: () => void;
   onComplete: (questions: InterviewQuestion[]) => void;
+  initialQuestions?: InterviewQuestion[];
+  sessionRecovered?: boolean;
 }
 
 export const InterviewScreen: React.FC<InterviewScreenProps> = ({
   settings,
   onBack,
-  onComplete
+  onComplete,
+  initialQuestions = [],
+  sessionRecovered = false
 }) => {
   usePerformanceTracking('InterviewScreen');
   
-  const [questions, setQuestions] = useState<InterviewQuestion[]>([]);
+  const { user } = useAuth();
+  const [questions, setQuestions] = useState<InterviewQuestion[]>(initialQuestions);
   const [currentAnswer, setCurrentAnswer] = useState('');
-  const [isLoadingQuestion, setIsLoadingQuestion] = useState(true);
+  const [isLoadingQuestion, setIsLoadingQuestion] = useState(!sessionRecovered);
   const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
   const [questionStartTime, setQuestionStartTime] = useState<number>(Date.now());
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [firstQuestionShown, setFirstQuestionShown] = useState(false);
+  const [firstQuestionShown, setFirstQuestionShown] = useState(sessionRecovered);
   const [interviewMetrics, setInterviewMetrics] = useState<InterviewMetrics>({
     totalResponseTime: 0,
     averageResponseLength: 0,
@@ -55,13 +61,36 @@ export const InterviewScreen: React.FC<InterviewScreenProps> = ({
     requestPermission
   } = useSpeechRecognition();
 
+  // ユーザー変更時のクリーンアップ
+  useEffect(() => {
+    if (!user) {
+      // ユーザーがログアウトした場合、面接を強制終了
+      if (isListening) {
+        stopListening();
+      }
+      onBack();
+    }
+  }, [user, isListening, stopListening, onBack]);
+
   // 利用回数記録（1問目が表示された時）
   useEffect(() => {
-    if (questions.length > 0 && !firstQuestionShown) {
+    if (questions.length > 0 && !firstQuestionShown && user) {
       recordUsage(settings);
       setFirstQuestionShown(true);
     }
-  }, [questions.length, firstQuestionShown, recordUsage, settings]);
+  }, [questions.length, firstQuestionShown, recordUsage, settings, user]);
+
+  // セッション復元時の通知
+  useEffect(() => {
+    if (sessionRecovered && questions.length > 0) {
+      showNotification({
+        type: 'success',
+        title: '面接セッションを復元しました',
+        message: '前回の続きから面接を再開できます。',
+        duration: 4000
+      });
+    }
+  }, [sessionRecovered, questions.length, showNotification]);
 
   // オンライン状態の監視
   useEffect(() => {
@@ -112,10 +141,12 @@ export const InterviewScreen: React.FC<InterviewScreenProps> = ({
     }
   }, [isSupported, checkPermission]);
 
-  // Initialize first question
+  // Initialize first question (セッション復元時はスキップ)
   useEffect(() => {
-    loadFirstQuestion();
-  }, []);
+    if (!sessionRecovered && questions.length === 0) {
+      loadFirstQuestion();
+    }
+  }, [sessionRecovered]);
 
   // Update answer with speech transcript - 改善版
   useEffect(() => {
@@ -150,6 +181,8 @@ export const InterviewScreen: React.FC<InterviewScreenProps> = ({
   }, [currentAnswer]);
 
   const loadFirstQuestion = async () => {
+    if (!user) return;
+    
     setIsLoadingQuestion(true);
     setQuestionStartTime(Date.now());
     
@@ -244,6 +277,16 @@ export const InterviewScreen: React.FC<InterviewScreenProps> = ({
   };
 
   const submitAnswer = async () => {
+    if (!user) {
+      showNotification({
+        type: 'error',
+        title: 'ユーザー認証が必要です',
+        message: 'ログインしてから面接を続行してください。',
+        duration: 5000
+      });
+      return;
+    }
+
     if (!currentAnswer.trim()) {
       showNotification({
         type: 'warning',
@@ -419,6 +462,11 @@ export const InterviewScreen: React.FC<InterviewScreenProps> = ({
                 <MessageSquare className="w-3 h-3 mr-1" />
                 深掘り: {interviewMetrics.deepDiveCount}回
               </div>
+              {sessionRecovered && (
+                <div className="text-green-600 font-medium">
+                  セッション復元済み
+                </div>
+              )}
             </div>
           </div>
 
@@ -466,7 +514,7 @@ export const InterviewScreen: React.FC<InterviewScreenProps> = ({
                          currentQuestion.questionType === 'personality' ? '人柄' :
                          currentQuestion.questionType === 'challenge' ? '挑戦' : 'その他'}
                       </span>
-                      {currentQuestion.deepDiveLevel && (
+                      {currentQuestion.deepDiveLevel && currentQuestion.deepDiveLevel > 1 && (
                         <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full">
                           深掘りLv.{currentQuestion.deepDiveLevel}
                         </span>
@@ -539,7 +587,7 @@ export const InterviewScreen: React.FC<InterviewScreenProps> = ({
 
                 <button
                   onClick={submitAnswer}
-                  disabled={!currentAnswer.trim() || isSubmittingAnswer || !isOnline}
+                  disabled={!currentAnswer.trim() || isSubmittingAnswer || !isOnline || !user}
                   className="flex items-center space-x-2 bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-semibold py-3 px-6 rounded-xl transition-all shadow-sm hover:shadow-md transform hover:scale-105 disabled:transform-none"
                 >
                   {isSubmittingAnswer ? (
